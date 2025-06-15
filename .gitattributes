@@ -1,4 +1,4 @@
-*.csv filter=lfs diff=lfs merge=lfs -text
 *.pkl filter=lfs diff=lfs merge=lfs -text
+*.csv filter=lfs diff=lfs merge=lfs -text
 *.joblib filter=lfs diff=lfs merge=lfs -text
 backend/fantasy_next_model.joblib !text !filter !merge !diff
