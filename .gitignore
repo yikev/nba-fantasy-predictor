@@ -1,1 +1,11 @@
-.DS_Store
+# Python
+__pycache__/
+*.pyc
+
+# Models / artifacts (keep these out of git, especially huge ones)
+*.joblib
+*.pkl
+
+# Node
+node_modules/
+dist/
