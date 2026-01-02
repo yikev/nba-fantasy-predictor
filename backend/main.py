@@ -1,41 +1,142 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
 import joblib
-import numpy as np
+from pathlib import Path
 
-app = FastAPI(title="NBA Fantasy Predictor")
+app = FastAPI(title="NBA Fantasy Predictor API")
 
-model = joblib.load("../fantasy_predictor_rf.joblib")
+# Allow your Vite frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-FEATURES = [
-    "points",
-    "reboundsTotal",
-    "assists",
-    "steals",
-    "blocks",
-    "turnovers",
-    "fieldGoalsAttempted",
-    "fieldGoalsMade",
-    "threePointersAttempted",
-    "threePointersMade",
-    "freeThrowsAttempted",
-    "freeThrowsMade",
-    "numMinutes",
-]
+BASE = Path(__file__).resolve().parent
 
-class PredictRequest(BaseModel):
-    data: dict[str, float]
+# Load datasets once at startup
+player_stats = pd.read_csv(BASE / "data" / "PlayerStatistics.csv")
+features_df = pd.read_csv(BASE / "data" / "features_dataset.csv")
 
-@app.post("/predict")
-def predict(req: PredictRequest):
-    missing = [f for f in FEATURES if f not in req.data]
-    extra = [k for k in req.data.keys() if k not in FEATURES]
+# Normalize types
+player_stats["gameDate"] = pd.to_datetime(player_stats["gameDate"], errors="coerce")
+features_df["gameDate"] = pd.to_datetime(features_df["gameDate"], errors="coerce")
 
-    if missing:
-        raise HTTPException(status_code=400, detail={"missing": missing})
-    if extra:
-        raise HTTPException(status_code=400, detail={"extra": extra})
+# Load next-game model
+bundle = joblib.load(BASE / "fantasy_next_model.joblib")
+model = bundle["model"]
+feature_cols = bundle["feature_cols"]
 
-    x = np.array([[req.data[f] for f in FEATURES]], dtype=float)
-    pred = model.predict(x)[0]
-    return {"prediction": float(pred)}
+
+def make_player_id(first: str, last: str, person_id: int) -> str:
+    # stable slug that frontend can use if you want
+    return f"{first}-{last}-{person_id}".lower().replace(" ", "-")
+
+
+@app.get("/players")
+def search_players(query: str = Query(..., min_length=1)):
+    q = query.strip().lower()
+
+    # unique players from player_stats
+    df = player_stats.copy()
+    df["fullName"] = (df["firstName"].fillna("") + " " + df["lastName"].fillna("")).str.strip()
+
+    # filter by name match
+    hits = df[df["fullName"].str.lower().str.contains(q, na=False)]
+
+    if hits.empty:
+        return []
+
+    # pick a recent row per personId to get current-ish team
+    hits = hits.sort_values("gameDate").dropna(subset=["personId"])
+    latest = hits.groupby("personId", as_index=False).tail(1)
+
+    out = []
+    for _, r in latest.iterrows():
+        out.append(
+            {
+                "personId": int(r["personId"]),
+                "fullName": r["fullName"],
+                "team": str(r.get("playerteamName", "")),
+            }
+        )
+
+    # limit results
+    return out[:15]
+
+
+@app.get("/players/{person_id}/summary")
+def player_summary(person_id: int):
+    df = player_stats[player_stats["personId"] == person_id].copy()
+    if df.empty:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    df = df.dropna(subset=["gameDate"]).sort_values("gameDate")
+
+    # Compute fantasy points using the SAME target already used in training if possible.
+    # Your PlayerStatistics.csv doesn't include FantasyPoints, so we’ll define a transparent formula here.
+    # You can adjust this later to match your training exactly.
+    def fantasy_points(row):
+        return (
+            row["points"]
+            + 1.2 * row["reboundsTotal"]
+            + 1.5 * row["assists"]
+            + 3.0 * row["steals"]
+            + 3.0 * row["blocks"]
+            - 1.0 * row["turnovers"]
+        )
+
+    for col in ["points","reboundsTotal","assists","steals","blocks","turnovers"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    df["FantasyPoints"] = df.apply(fantasy_points, axis=1)
+
+    # Season averages from all rows (or later you can filter to a specific season range)
+    avg_cols = [
+        "points","reboundsTotal","assists","steals","blocks","turnovers",
+        "fieldGoalsAttempted","fieldGoalsMade",
+        "threePointersAttempted","threePointersMade",
+        "freeThrowsAttempted","freeThrowsMade",
+        "numMinutes"
+    ]
+    for col in avg_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    season_avg = {col: float(df[col].mean()) for col in avg_cols if col in df.columns}
+
+    last5 = df.tail(5)
+    last5_fp = [float(x) for x in last5["FantasyPoints"].tolist()]
+
+    # Player identity
+    first = str(df.iloc[-1]["firstName"])
+    last = str(df.iloc[-1]["lastName"])
+    full = (first + " " + last).strip()
+    team = str(df.iloc[-1].get("playerteamName", ""))
+
+    return {
+        "personId": person_id,
+        "fullName": full,
+        "team": team,
+        "seasonAverages": season_avg,
+        "last5FantasyPoints": last5_fp,
+    }
+
+
+@app.get("/players/{person_id}/predict-next")
+def predict_next(person_id: int):
+    df = features_df[features_df["personId"] == person_id].copy()
+    if df.empty:
+        raise HTTPException(status_code=404, detail="No feature rows for this player")
+
+    df = df.dropna(subset=["gameDate"]).sort_values("gameDate")
+    latest = df.iloc[-1]
+
+    # Build feature vector in correct order
+    x = latest[feature_cols].to_frame().T
+
+    pred = float(model.predict(x)[0])
+    return {"personId": person_id, "predictedNextFantasyPoints": pred}

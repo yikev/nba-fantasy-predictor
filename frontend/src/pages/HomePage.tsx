@@ -1,52 +1,81 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { MOCK_PLAYERS } from "../data/mockPlayers";
+import { searchPlayers, type PlayerSearchResult } from "../api";
 
 export default function HomePage() {
-  const [query, setQuery] = useState("");
   const navigate = useNavigate();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<PlayerSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return [];
-    return MOCK_PLAYERS.filter((p) => p.fullName.toLowerCase().includes(q)).slice(0, 8);
+  // Debounce
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      setError(null);
+      return;
+    }
+
+    const t = setTimeout(async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await searchPlayers(q);
+        setResults(data);
+      } catch (e: any) {
+        setError(e?.message ?? "Failed to search");
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(t);
   }, [query]);
 
   return (
-    <div style={{ maxWidth: 900, margin: "40px auto", padding: 16, fontFamily: "system-ui" }}>
-      <h1 style={{ marginBottom: 8 }}>NBA Fantasy Predictor</h1>
-      <p style={{ marginTop: 0, opacity: 0.8 }}>
+    <div style={{ maxWidth: 900, margin: "60px auto", padding: 16, fontFamily: "system-ui" }}>
+      <h1 style={{ marginBottom: 6 }}>NBA Fantasy Predictor</h1>
+      <p style={{ opacity: 0.75, marginTop: 0 }}>
         Search a player to view season averages, last 5 fantasy points, and next game prediction.
       </p>
 
-      <div style={{ marginTop: 16 }}>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search NBA player (ex: Jokic, Shai, Curry)"
-          style={{
-            width: "100%",
-            padding: 12,
-            borderRadius: 10,
-            border: "1px solid #ccc",
-            fontSize: 16,
-          }}
-        />
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search a player..."
+        style={{
+          width: "100%",
+          padding: 12,
+          borderRadius: 10,
+          border: "1px solid #444",
+          background: "#1f1f1f",
+          color: "white",
+        }}
+      />
+
+      <div style={{ marginTop: 10 }}>
+        {loading && <div style={{ opacity: 0.75 }}>Searching...</div>}
+        {error && <div style={{ color: "#ff7b7b" }}>{error}</div>}
       </div>
 
       {results.length > 0 && (
         <div
           style={{
-            marginTop: 12,
-            border: "1px solid #e5e5e5",
+            marginTop: 10,
             borderRadius: 12,
             overflow: "hidden",
+            border: "1px solid #e5e5e5",
+            background: "white",
+            color: "#111",
           }}
         >
           {results.map((p) => (
             <button
-              key={p.id}
-              onClick={() => navigate(`/players/${p.id}`)}
+              key={p.personId}
+              onClick={() => navigate(`/players/${p.personId}`)}
               style={{
                 width: "100%",
                 textAlign: "left",
@@ -58,17 +87,11 @@ export default function HomePage() {
                 cursor: "pointer",
               }}
             >
-              <div style={{ fontWeight: 600 }}>{p.fullName}</div>
-              <div style={{ fontSize: 13, opacity: 0.75 }}>
-                {p.team} - {p.position}
-              </div>
+              <div style={{ fontWeight: 700 }}>{p.fullName}</div>
+              <div style={{ fontSize: 13, opacity: 0.75, color: "#333" }}>{p.team ?? ""}</div>
             </button>
           ))}
         </div>
-      )}
-
-      {query.trim() !== "" && results.length === 0 && (
-        <div style={{ marginTop: 12, opacity: 0.75 }}>No matches.</div>
       )}
     </div>
   );
