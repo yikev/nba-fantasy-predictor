@@ -29,11 +29,22 @@ features_df["gameDate"] = pd.to_datetime(features_df["gameDate"], errors="coerce
 bundle = joblib.load(BASE / "fantasy_next_model.joblib")
 model = bundle["model"]
 feature_cols = bundle["feature_cols"]
+MODEL_MAE = bundle.get("mae")  # might be missing if you didn't save it
 
 
 def make_player_id(first: str, last: str, person_id: int) -> str:
     # stable slug that frontend can use if you want
     return f"{first}-{last}-{person_id}".lower().replace(" ", "-")
+
+
+def _safe_float(v, default: float = 0.0) -> float:
+    """Convert to float, treating NaN/None as default."""
+    try:
+        if v is None or (isinstance(v, float) and pd.isna(v)) or pd.isna(v):
+            return float(default)
+        return float(v)
+    except Exception:
+        return float(default)
 
 
 @app.get("/players")
@@ -76,9 +87,7 @@ def player_summary(person_id: int):
 
     df = df.dropna(subset=["gameDate"]).sort_values("gameDate")
 
-    # Compute fantasy points using the SAME target already used in training if possible.
-    # Your PlayerStatistics.csv doesn't include FantasyPoints, so we’ll define a transparent formula here.
-    # You can adjust this later to match your training exactly.
+    # Transparent formula (keep consistent with your README)
     def fantasy_points(row):
         return (
             row["points"]
@@ -89,17 +98,17 @@ def player_summary(person_id: int):
             - 1.0 * row["turnovers"]
         )
 
-    for col in ["points","reboundsTotal","assists","steals","blocks","turnovers"]:
+    for col in ["points", "reboundsTotal", "assists", "steals", "blocks", "turnovers"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     df["FantasyPoints"] = df.apply(fantasy_points, axis=1)
 
-    # Season averages from all rows (or later you can filter to a specific season range)
+    # Season averages
     avg_cols = [
-        "points","reboundsTotal","assists","steals","blocks","turnovers",
-        "fieldGoalsAttempted","fieldGoalsMade",
-        "threePointersAttempted","threePointersMade",
-        "freeThrowsAttempted","freeThrowsMade",
+        "points", "reboundsTotal", "assists", "steals", "blocks", "turnovers",
+        "fieldGoalsAttempted", "fieldGoalsMade",
+        "threePointersAttempted", "threePointersMade",
+        "freeThrowsAttempted", "freeThrowsMade",
         "numMinutes"
     ]
     for col in avg_cols:
@@ -140,3 +149,36 @@ def predict_next(person_id: int):
 
     pred = float(model.predict(x)[0])
     return {"personId": person_id, "predictedNextFantasyPoints": pred}
+
+
+@app.get("/players/{person_id}/context")
+def player_context(person_id: int):
+    """
+    Returns human-readable context using the same engineered features used during training.
+    This is NOT model internals; it is explanatory metadata for the UI.
+    """
+    df = features_df[features_df["personId"] == person_id].copy()
+    if df.empty:
+        raise HTTPException(status_code=404, detail="No feature rows for this player")
+
+    df = df.dropna(subset=["gameDate"]).sort_values("gameDate")
+    latest = df.iloc[-1]
+
+    # These columns exist in your features_dataset.csv (based on your earlier printout)
+    last5_avg_fp = _safe_float(latest.get("FantasyPoints_avg_last_5"), 0.0)
+    season_avg_fp = _safe_float(latest.get("FantasyPoints_season_avg"), 0.0)
+    minutes_trend = _safe_float(latest.get("minutes_diff"), 0.0)
+    home = bool(int(_safe_float(latest.get("home"), 0.0)))
+    is_playoff = bool(int(_safe_float(latest.get("is_playoff"), 0.0)))
+
+    mae = float(MODEL_MAE) if MODEL_MAE is not None else 5.68
+
+    return {
+        "personId": int(person_id),
+        "last5_avg_fp": last5_avg_fp,
+        "season_avg_fp": season_avg_fp,
+        "minutes_trend": minutes_trend,
+        "home": home,
+        "is_playoff": is_playoff,
+        "model_mae": mae,
+    }
