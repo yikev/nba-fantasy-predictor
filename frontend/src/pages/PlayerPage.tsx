@@ -1,10 +1,23 @@
 import { Link, useParams } from "react-router-dom";
-import { useEffect, useMemo, useState } from "react";
-import { getPlayerPrediction, getPlayerSummary, type PlayerSummary } from "../api";
+import { useEffect, useState } from "react";
+import {
+  getPlayerSummary,
+  getPlayerPrediction,
+  getPlayerPredictionContext,
+  type PlayerPredictionContext,
+  type PlayerSummary,
+} from "../api";
 
 function StatRow({ label, value }: { label: string; value: number }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #eee" }}>
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        padding: "8px 0",
+        borderBottom: "1px solid #eee",
+      }}
+    >
       <div style={{ opacity: 0.85, color: "#333" }}>{label}</div>
       <div style={{ fontWeight: 600, color: "#111" }}>{value}</div>
     </div>
@@ -21,6 +34,8 @@ export default function PlayerPage() {
 
   const [summary, setSummary] = useState<PlayerSummary | null>(null);
   const [pred, setPred] = useState<number | null>(null);
+  const [context, setContext] = useState<PlayerPredictionContext | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,13 +53,23 @@ export default function PlayerPage() {
         setLoading(true);
         setError(null);
 
-        const s = await getPlayerSummary(personId);
-        const p = await getPlayerPrediction(personId);
+        // reset for new player loads
+        setSummary(null);
+        setPred(null);
+        setContext(null);
+
+        // fetch all in parallel
+        const [s, p, c] = await Promise.all([
+          getPlayerSummary(personId),
+          getPlayerPrediction(personId),
+          getPlayerPredictionContext(personId),
+        ]);
 
         if (cancelled) return;
 
         setSummary(s);
         setPred(p.predictedNextFantasyPoints);
+        setContext(c);
       } catch (e: any) {
         if (cancelled) return;
         setError(e?.message ?? "Failed to load player");
@@ -61,7 +86,9 @@ export default function PlayerPage() {
   if (loading) {
     return (
       <div style={{ maxWidth: 900, margin: "40px auto", padding: 16, fontFamily: "system-ui" }}>
-        <Link to="/" style={{ color: "#8ab4ff" }}>← Back to search</Link>
+        <Link to="/" style={{ color: "#8ab4ff" }}>
+          ← Back to search
+        </Link>
 
         <div style={{ marginTop: 14 }}>
           <div style={{ height: 34, width: 320, background: "#2a2a2a", borderRadius: 10 }} />
@@ -81,13 +108,16 @@ export default function PlayerPage() {
   if (error || !summary) {
     return (
       <div style={{ maxWidth: 900, margin: "40px auto", padding: 16, fontFamily: "system-ui" }}>
-        <Link to="/" style={{ color: "#8ab4ff" }}>← Back to search</Link>
+        <Link to="/" style={{ color: "#8ab4ff" }}>
+          ← Back to search
+        </Link>
         <div style={{ marginTop: 16, color: "#ff7b7b" }}>{error ?? "Player not found"}</div>
       </div>
     );
   }
 
   const avg = summary.seasonAverages;
+
   const last5Avg =
     summary.last5FantasyPoints.length > 0
       ? summary.last5FantasyPoints.reduce((a, b) => a + b, 0) / summary.last5FantasyPoints.length
@@ -95,7 +125,9 @@ export default function PlayerPage() {
 
   return (
     <div style={{ maxWidth: 900, margin: "40px auto", padding: 16, fontFamily: "system-ui" }}>
-      <Link to="/" style={{ color: "#8ab4ff" }}>← Back to search</Link>
+      <Link to="/" style={{ color: "#8ab4ff" }}>
+        ← Back to search
+      </Link>
 
       <div style={{ marginTop: 14 }}>
         <h1 style={{ marginBottom: 6 }}>{summary.fullName}</h1>
@@ -118,9 +150,7 @@ export default function PlayerPage() {
       >
         <div>
           <div style={{ fontSize: 13, opacity: 0.75 }}>Predicted next game</div>
-          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 6 }}>
-            {pred == null ? "-" : fmt(pred)}
-          </div>
+          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 6 }}>{pred == null ? "-" : fmt(pred)}</div>
           <div style={{ opacity: 0.75 }}>Fantasy points</div>
         </div>
 
@@ -130,6 +160,36 @@ export default function PlayerPage() {
           <div style={{ fontSize: 12, opacity: 0.7 }}>Fantasy points</div>
         </div>
       </div>
+
+      {/* NEW: Prediction context card */}
+      {context && (
+        <div
+          style={{
+            marginTop: 18,
+            padding: 16,
+            border: "1px solid #e5e5e5",
+            borderRadius: 14,
+            background: "white",
+            color: "#111",
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: 10 }}>Prediction context</h3>
+
+          <StatRow label="Last 5 avg FP" value={context.last5_avg_fp ?? 0} />
+          <StatRow label="Season avg FP" value={context.season_avg_fp ?? 0} />
+          <StatRow label="Minutes trend" value={context.minutes_trend ?? 0} />
+
+          <div style={{ marginTop: 10, opacity: 0.8, fontSize: 13 }}>
+            Home game: <b>{context.home ? "Yes" : "No"}</b> • Playoffs: <b>{context.is_playoff ? "Yes" : "No"}</b>
+            {context.model_mae != null && (
+              <>
+                {" "}
+                • Model MAE: <b>{Number(context.model_mae).toFixed(2)}</b>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 18 }}>
         <div style={{ padding: 16, border: "1px solid #e5e5e5", borderRadius: 14, background: "white", color: "#111" }}>

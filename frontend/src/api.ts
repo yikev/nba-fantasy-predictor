@@ -14,6 +14,16 @@ export type PlayerSummary = {
   last5FantasyPoints: number[];
 };
 
+export type PlayerPredictionContext = {
+  personId: number;
+  last5_avg_fp: number;
+  season_avg_fp: number;
+  minutes_trend: number;
+  home: boolean;
+  is_playoff: boolean;
+  model_mae?: number | null;
+};
+
 export async function searchPlayers(query: string): Promise<PlayerSearchResult[]> {
   const url = `${API_BASE}/players?query=${encodeURIComponent(query)}`;
   const res = await fetch(url);
@@ -27,8 +37,18 @@ export async function getPlayerSummary(personId: number): Promise<PlayerSummary>
   return res.json();
 }
 
-export async function getPlayerPrediction(personId: number): Promise<{ predictedNextFantasyPoints: number }> {
+export async function getPlayerPrediction(
+  personId: number
+): Promise<{ predictedNextFantasyPoints: number }> {
   const res = await fetch(`${API_BASE}/players/${personId}/predict-next`);
   if (!res.ok) throw new Error(`Predict failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getPlayerPredictionContext(
+  personId: number
+): Promise<PlayerPredictionContext> {
+  const res = await fetch(`${API_BASE}/players/${personId}/context`);
+  if (!res.ok) throw new Error(`Context failed: ${res.status}`);
   return res.json();
 }
